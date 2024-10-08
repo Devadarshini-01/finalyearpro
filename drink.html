@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ThingSpeak Data Display with Drinking Water Status</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: #f0f8ff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            flex-direction: column;
+        }
+        .container {
+            max-width: 1200px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .row {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+        }
+        .row.center {
+            justify-content: center;
+        }
+        .card {
+            background-color: #ffffff;
+            border-radius: 15px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            transition: transform 0.3s, box-shadow 0.3s;
+            cursor: pointer;
+            text-align: center;
+            position: relative;
+            width: 300px;
+        }
+        .card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.15);
+        }
+        .card.clicked {
+            animation: reveal 0.6s forwards;
+        }
+        @keyframes reveal {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        .card h2 {
+            margin-bottom: 10px;
+            font-size: 24px;
+            color: #333;
+        }
+        .card span.value {
+            display: block;
+            font-size: 36px;
+            color: #666;
+            margin-top: 15px;
+            visibility: hidden;
+        }
+        .safe { color: green; }
+        .warning { color: orange; }
+        .danger { color: red; }
+        .status {
+            margin-top: 40px;
+            font-size: 28px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<h1>Drinking Water</h1>
+<div class="container">
+    <div class="row">
+        <div class="card" id="tempCard">
+            <h2>Temperature</h2>
+            <p id="tempComment">Fetching...</p>
+            <span class="value" id="temperature">-- °C</span>
+        </div>
+        <div class="card" id="pHCard">
+            <h2>pH Level</h2>
+            <p id="pHComment">Fetching...</p>
+            <span class="value" id="pH">--</span>
+        </div>
+        <div class="card" id="salinityCard">
+            <h2>Salinity</h2>
+            <p id="salinityComment">Fetching...</p>
+            <span class="value" id="salinity">-- PSU</span>
+        </div>
+    </div>
+    <div class="row center">
+        <div class="card" id="tdsCard">
+            <h2>TDS (Total Dissolved Solids)</h2>
+            <p id="tdsComment">Fetching...</p>
+            <span class="value" id="tds">-- ppm</span>
+        </div>
+        <div class="card" id="conductivityCard">
+            <h2>Conductivity</h2>
+            <p id="conductivityComment">Fetching...</p>
+            <span class="value" id="conductivity">-- μS/cm</span>
+        </div>
+    </div>
+</div>
+
+<div class="status">
+    <span id="overallStatus">Fetching water status...</span>
+</div>
+
+<script>
+    const channelID = "2685439";
+    const readAPIKey = "68OXCL455MIQELT9";
+    const tempURL = `https://api.thingspeak.com/channels/${channelID}/fields/1.json?api_key=${readAPIKey}&results=1`;
+    const pHURL = `https://api.thingspeak.com/channels/${channelID}/fields/2.json?api_key=${readAPIKey}&results=1`;
+    const salinityURL = `https://api.thingspeak.com/channels/${channelID}/fields/3.json?api_key=${readAPIKey}&results=1`;
+    const tdsURL = `https://api.thingspeak.com/channels/${channelID}/fields/4.json?api_key=${readAPIKey}&results=1`;
+    const conductivityURL = `https://api.thingspeak.com/channels/${channelID}/fields/5.json?api_key=${readAPIKey}&results=1`;
+
+    // Thresholds
+    const tempThresholds = { low: 10, high: 30 };        // Safe range for temperature (10°C to 30°C)
+    const pHThresholds = { low: 6.5, high: 8.5 };        // Safe range for pH (6.5 to 8.5)
+    const salinityThresholds = { low: 0, high: 0.5 };     // Safe range for salinity (0 to 35 PSU)
+    const tdsThresholds = { low: 0, high: 500 };         // Safe range for TDS (0 to 500 ppm)
+    const conductivityThresholds = { low: 50, high: 500 }; // Safe range for conductivity (50 to 1500 μS/cm)
+
+    let isSafeForDrinking = true;  // To track overall water safety status
+
+    // Function to check value against thresholds
+    function evaluateThresholds(value, thresholds) {
+        if (value < thresholds.low || value > thresholds.high) {
+            isSafeForDrinking = false;  // Mark as unsafe if any parameter is out of range
+            return { message: "Unsafe", class: "danger" };
+        } else {
+            return { message: "Safe", class: "safe" };
+        }
+    }
+
+    // Function to fetch data from ThingSpeak
+   // Function to fetch data from ThingSpeak
+   function fetchData(url, elementId, field, thresholds, commentElement, unit = "") {
+    fetch(url)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Network response was not ok, status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data && data.feeds && data.feeds.length > 0) {  // Ensure feeds have entries
+                const latestEntry = data.feeds[0];
+                const value = parseFloat(latestEntry[field]);
+                if (!isNaN(value)) {
+                    document.getElementById(elementId).innerHTML = `${value} ${unit}`;
+                    const evaluation = evaluateThresholds(value, thresholds);
+                    document.getElementById(commentElement).textContent = evaluation.message;
+                    document.getElementById(commentElement).className = evaluation.class;
+                } else {
+                    document.getElementById(elementId).textContent = "Invalid data";
+                    document.getElementById(commentElement).textContent = "Data error";
+                    document.getElementById(commentElement).className = "warning";
+                }
+            } else {
+                // If no data is available or the feeds are empty
+                document.getElementById(elementId).textContent = "No data";
+                document.getElementById(commentElement).textContent = "No data available";
+                document.getElementById(commentElement).className = "warning";
+            }
+
+            // Update overall status message
+            updateOverallStatus();
+        })
+        .catch(error => {
+            console.error("Error fetching data: ", error);
+            document.getElementById(elementId).textContent = "Error";
+            document.getElementById(commentElement).textContent = "Error fetching data";
+            document.getElementById(commentElement).className = "danger";
+        });
+}
+
+
+    // Function to update the overall water quality status
+    function updateOverallStatus() {
+        const statusElement = document.getElementById("overallStatus");
+        if (isSafeForDrinking) {
+            statusElement.textContent = "Water is fit for drinking.";
+            statusElement.className = "safe";
+        } else {
+            statusElement.textContent = "Water is not fit for drinking.";
+            statusElement.className = "danger";
+        }
+    }
+
+    // Adding event listeners to cards for animations and revealing values
+    document.querySelectorAll('.card').forEach(card => {
+        card.addEventListener('click', () => {
+            card.classList.add('clicked');
+            const valueElement = card.querySelector('.value');
+            valueElement.style.visibility = 'visible';
+            setTimeout(() => {
+                card.classList.remove('clicked');
+            }, 600);
+        });
+    });
+
+    // Fetching data for temperature, pH, salinity, TDS, and conductivity
+    fetchData(tempURL, "temperature", "field1", tempThresholds, "tempComment", "°C");
+    fetchData(pHURL, "pH", "field2", pHThresholds, "pHComment");  // No unit for pH
+    fetchData(salinityURL, "salinity", "field3", salinityThresholds, "salinityComment", "PSU");
+    fetchData(tdsURL, "tds", "field4", tdsThresholds, "tdsComment", "ppm");
+    fetchData(conductivityURL, "conductivity", "field5", conductivityThresholds, "conductivityComment", "μS/cm");
+
+
+</script>
+
+</body>
+</html>
